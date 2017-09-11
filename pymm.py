@@ -252,11 +252,11 @@ if __name__ == '__main__':
                         choices=['64gb','48gb','32gb','16gb','2gb','1gb','512mb'], default='512mb')
     parser.add_argument('--region', '-r', help='Specify Digital Ocean Server Region',
                         choices=['sfo1', 'nyc1', 'nyc2', 'ams1', 'ams2', 'lon1'], default='sfo1')
-    parser.add_argument('--github-repo', help='Specify Github repo for storing and fetching save data', default=None)
-    parser.add_argument('--github-username', help='Username for accessing github', default=None)
-    parser.add_argument('--github-password', help='Password for accessing github', default=None)
-    parser.add_argument('--github-filename', help='Specify which file in the repo to fetch when loading save data.'
-                                                  ' By default the most recent will be selected', default=None)
+    #parser.add_argument('--github-repo', help='Specify Github repo for storing and fetching save data', default=None)
+    #parser.add_argument('--github-username', help='Username for accessing github', default=None)
+    #parser.add_argument('--github-password', help='Password for accessing github', default=None)
+    #parser.add_argument('--github-filename', help='Specify which file in the repo to fetch when loading save data.'
+    #                                              ' By default the most recent will be selected', default=None)
 
     args = vars(parser.parse_args())
 
@@ -274,11 +274,8 @@ if __name__ == '__main__':
     elif args['command'] == 'install':
         teardown_server()
         install_server(do_size=args['size'], do_region=args['region'],
-                       github=(args['github-repo'],
-                               args['github-username'],
-                               args['github-password'],
-                               args['github-filename']))
+                       github=None)
     elif args['command'] == 'download':
-        download_server_info(args['github-repo'], args['github-username'], args['github-password'])
+        download_server_info()
 
     print("Script Execution Complete. Terminating")
