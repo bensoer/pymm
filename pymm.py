@@ -7,6 +7,10 @@ import requests
 import paramiko
 import time
 import argparse
+import zipfile
+import shutil
+import hashlib
+from github import Github
 
 ROOT_DIR = os.path.dirname(os.path.realpath(__file__))
 DO_API_TOKEN = None
@@ -46,7 +50,7 @@ def teardown_server():
             print(response.content)
 
 
-def install_server(do_size, do_region):
+def install_server(do_size, do_region, github=None):
     global DO_API_TOKEN
     global ROOT_DIR
 
@@ -160,6 +164,83 @@ def install_server(do_size, do_region):
 
             break
 
+def download_server_info(git_repo=None, git_username=None, git_password=None):
+    #  downloads the server information so that restores can occur
+
+    # find the server
+    print("Connecting To DO And Searching For pymm Server")
+    manager = digitalocean.Manager(token=DO_API_TOKEN)
+    all_droplets = manager.get_all_droplets()
+    found = False
+    for droplet in all_droplets:
+        print(droplet)
+        if "pymm-server" in droplet.name:
+            found = True
+            print("Found pymm Server. Now Connecting")
+            droplet.load()
+
+            priv_key = paramiko.RSAKey.from_private_key_file(ROOT_DIR + "/conf/privkey.pem")
+            ssh_client = paramiko.SSHClient()
+            ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            ssh_client.connect(hostname=droplet.ip_address, username="root", pkey=priv_key)
+            sftp_client = ssh_client.open_sftp()
+
+            print("Authentication And Connection Via SFTP Successful, Now Transferring Files")
+
+
+            # download the files
+
+
+            # if a github repo was provided encrypt and send the data to there
+            if git_repo is not None and git_username is not None and git_password is not None:
+                now = datetime.now()
+                nowstring = now.strftime("%Y%m%dT%H.%M.%S")
+                if not os.path.isdir(ROOT_DIR + "/tmp"):
+                    os.mkdir(ROOT_DIR + "/tmp")
+
+                # compress all the data
+                zip_fp = zipfile.ZipFile(ROOT_DIR + "/tmp/pymmdat-" + nowstring + ".zip", mode='w')
+                # use a password that is a hash from the git username and password
+                hasher = hashlib.sha512()
+                hasher.update(b'' + git_username + git_password)
+                encrypt_password = hasher.hexdigest()
+
+                for file in os.listdir(ROOT_DIR + "/conf"):
+                    zip_fp.write(filename=ROOT_DIR + "/conf/" + file,
+                                 compress_type=zipfile.ZIP_DEFLATED,
+                                 arcname=os.path.basename(ROOT_DIR + "/conf/" + file))
+                zip_fp.close()
+                if os.path.isfile(ROOT_DIR + "/tmp/pymmdat-" + nowstring + ".zip"):
+                    shutil.move(ROOT_DIR + "/tmp/pymmdat-" + nowstring + ".zip", ROOT_DIR + "/conf/pymmdat-" + nowstring + ".zip")
+                shutil.rmtree(ROOT_DIR + "/tmp")
+
+                github_client = Github(git_username, git_password)
+                repo_found = False
+                for repo in github_client.get_user().get_repos():
+                    #print("Repo Name: " + repo.full_name + " (" + repo.clone_url + ")")
+                    if repo.clone_url == git_repo:
+                        print("Found Repo To Upload File To!")
+                        repo_found = True
+                        with open(ROOT_DIR + "/conf/pymmdat-" + nowstring + ".zip", mode='rb') as file:
+                            fileContent = file.read()
+                            repo.create_file("/pymmdat-" + nowstring + ".zip", "pymmexport " + nowstring, fileContent)
+                        return
+
+                if not repo_found:
+                    print("The specified Repo could not be found! Can't upload save data. Is it a github repo ? "
+                          "Are you sure it exists ?")
+
+
+            # else its stored localy - we do nothing
+
+
+
+
+
+
+    if not found:
+        print("Could not Find pymm Server!. Could not download information!")
+
 
 if __name__ == '__main__':
     # 64gb, 48gb, 32gb, 16gb, 2gb, 1gb, 512mb
@@ -171,6 +252,12 @@ if __name__ == '__main__':
                         choices=['64gb','48gb','32gb','16gb','2gb','1gb','512mb'], default='512mb')
     parser.add_argument('--region', '-r', help='Specify Digital Ocean Server Region',
                         choices=['sfo1', 'nyc1', 'nyc2', 'ams1', 'ams2', 'lon1'], default='sfo1')
+    parser.add_argument('--github-repo', help='Specify Github repo for storing and fetching save data', default=None)
+    parser.add_argument('--github-username', help='Username for accessing github', default=None)
+    parser.add_argument('--github-password', help='Password for accessing github', default=None)
+    parser.add_argument('--github-filename', help='Specify which file in the repo to fetch when loading save data.'
+                                                  ' By default the most recent will be selected', default=None)
+
     args = vars(parser.parse_args())
 
     # get absolute path to us
@@ -186,8 +273,12 @@ if __name__ == '__main__':
         teardown_server()
     elif args['command'] == 'install':
         teardown_server()
-        install_server(do_size=args['size'], do_region=args['region'])
+        install_server(do_size=args['size'], do_region=args['region'],
+                       github=(args['github-repo'],
+                               args['github-username'],
+                               args['github-password'],
+                               args['github-filename']))
     elif args['command'] == 'download':
-        pass
+        download_server_info(args['github-repo'], args['github-username'], args['github-password'])
 
     print("Script Execution Complete. Terminating")
