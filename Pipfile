@@ -5,5 +5,7 @@ verify_ssl = true
 [packages]
 paramiko = "*"
 python-digitalocean = "*"
-pycrypto = "*"
 pygithub = "*"
+digitalocean-python = "*"
+pycryptodome = "*"
+pycryptodomex = "*"

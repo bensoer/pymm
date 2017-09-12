@@ -11,6 +11,11 @@ import zipfile
 import shutil
 import hashlib
 from github import Github
+import json
+
+from urllib.request import urlopen
+from shutil import copyfileobj
+from tempfile import NamedTemporaryFile
 
 ROOT_DIR = os.path.dirname(os.path.realpath(__file__))
 DO_API_TOKEN = None
@@ -65,7 +70,7 @@ def install_server(do_size, do_region, github=None):
 
     pub_key = priv_key.publickey()
     pub_key_fp = open(ROOT_DIR + "/conf/pubkey.pem", "wb")
-    pub_key_fp.write(pub_key.exportKey('OpenSSH'))
+    pub_key_fp.write(b'' + pub_key.exportKey('OpenSSH'))
     pub_key_fp.close()
 
     print("Uploading New SSH Key")
@@ -159,6 +164,17 @@ def install_server(do_size, do_region, github=None):
             response3 = ssh_client.exec_command(command3)
             print(response3[1].read())
             print(response3[2].read())
+
+            print("Determing Appropriate Minecraft Version")
+            url = "https://launchermeta.mojang.com/mc/game/version_manifest.json"
+            data = urlopen(url).read().decode(encoding='UTF-8')
+            print(data)
+            json_data = json.load(data)
+            print(json_data["latest"])
+
+
+
+
 
             ssh_client.close()
 
