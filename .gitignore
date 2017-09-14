@@ -50,3 +50,4 @@ fabric.properties
 
 Pipfile.lock
 /conf
+.fuse*

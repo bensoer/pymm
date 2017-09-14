@@ -19,6 +19,8 @@ from tempfile import NamedTemporaryFile
 
 ROOT_DIR = os.path.dirname(os.path.realpath(__file__))
 DO_API_TOKEN = None
+# '64gb','48gb','32gb','16gb','2gb','1gb','512mb'
+DO_RESOURCE_DIC = { '64gb': '64g', '48gb': '48g', '32gb': '32g', '16gb': '16g', '2gb': '2g', '1gb': '1024m', '512mb':'512m'}
 
 
 def teardown_server():
@@ -58,6 +60,9 @@ def teardown_server():
 def install_server(do_size, do_region, github=None):
     global DO_API_TOKEN
     global ROOT_DIR
+    global DO_RESOURCE_DIC
+
+    java_max_heap = DO_RESOURCE_DIC[do_size]
 
     manager = digitalocean.Manager(token=DO_API_TOKEN)
 
@@ -132,6 +137,7 @@ def install_server(do_size, do_region, github=None):
             print("Connecting via SSH to the DO Server")
             droplet.load()
             print("IP Address Of DO Server: " + droplet.ip_address)
+            ip_address = droplet.ip_address
 
             priv_key = paramiko.RSAKey.from_private_key_file(ROOT_DIR + "/conf/privkey.pem")
             ssh_client = paramiko.SSHClient()
@@ -143,7 +149,8 @@ def install_server(do_size, do_region, github=None):
             command1 = "DEBIAN_FRONTEND=noninteractive add-apt-repository -y ppa:webupd8team/java \n" \
                        "DEBIAN_FRONTEND=noninteractive apt-get -y update \n" \
                        "DEBIAN_FRONTEND=noninteractive apt-get -y upgrade \n" \
-                       "DEBIAN_FRONTEND=noninteractive apt-get install -y python-software-properties debconf-utils \n"
+                       "DEBIAN_FRONTEND=noninteractive apt-get install -y python-software-properties debconf-utils " \
+                       "zip unzip\n"
             response1 = ssh_client.exec_command(command1)
             print(response1[1].read())  # stdout
             print(response1[2].read())  # stderr
@@ -167,18 +174,66 @@ def install_server(do_size, do_region, github=None):
 
             print("Determing Appropriate Minecraft Version")
             url = "https://launchermeta.mojang.com/mc/game/version_manifest.json"
-            data = urlopen(url).read().decode(encoding='UTF-8')
-            print(data)
-            json_data = json.load(data)
+
+            vm_response = requests.get(url, verify=False, stream=True)
+            with open(ROOT_DIR + "/conf/version_manifest.json", 'wb') as f:
+                for chunk in vm_response.iter_content(chunk_size=1024):
+                    if chunk:
+                        f.write(chunk)
+
+
+            json_data = json.load(open(ROOT_DIR + "/conf/version_manifest.json"))
             print(json_data["latest"])
 
+            minecraft_url = "https://s3.amazonaws.com/Minecraft.Download/versions/" + \
+                            json_data["latest"]["release"] + \
+                            "/minecraft_server." + json_data["latest"]["release"] + ".jar"
 
+            minecraft_file_name = "minecraft_server." + json_data["latest"]["release"] + ".jar"
 
+            print("Downloading Minecraft Server")
+            print("Download URL: " + minecraft_url)
+            command4 = "DEBIAN_FRONTEND=noninteractive \n cd / \n mkdir minecraft \n cd /minecraft \n" + \
+                        "wget -O " + minecraft_file_name + " " + minecraft_url + "\n chmod -R 777 *\n"
 
+            response4 = ssh_client.exec_command(command4)
+            print(response4[1].read())
+            print(response4[2].read())
+
+            print("Starting Initial Run Of Minecraft Server")
+            command5 = "cd /minecraft\n java -Xmx" + java_max_heap + " -Xms512M -jar ./" + minecraft_file_name + " nogui"
+            response5 = ssh_client.exec_command(command5)
+            print(response5[1].read())
+            print(response5[2].read())
+
+            print("Agreeing To EULA")
+            command6 = "cd /minecraft\n sed -i -e 's/eula=false/eula=true/g' eula.txt\n"
+            response6 = ssh_client.exec_command(command6)
+            print(response6[1].read())
+            print(response6[2].read())
+
+            print("Configuring Default Settings")
+            command7 = "cd /minecraft\n " \
+                       "sed -i -e 's/online-mode=true/online-mode=false/g' server.properties\n " \
+                       "sed -i -e 's/motd=A Minecraft Server/motd=pymm Minecraft Server/g' server.properties\n " \
+                       "sed -i -e 's/snooper-enabled=true/snooper-enabled=false/g' server.properties\n " \
+                       "sed -i -e 's/difficulty=1/difficulty=2/g' server.properties\n "
+
+            response7 = ssh_client.exec_command(command7)
+            print(response7[1].read())
+            print(response7[2].read())
+
+            # "kill $(ps -aux | grep \"minecraft_server\"| awk '{print $2}')\n" \
+            print("Loading For Sure Now")
+            command8 = "cd /minecraft\n " \
+                       "screen -dmS minecraft java -Xmx" + java_max_heap + " -Xms512M -jar ./" + minecraft_file_name + " nogui\n"
+            response8 = ssh_client.exec_command(command8)
+            print(response8[1].read())
+            print(response8[2].read())
 
             ssh_client.close()
 
-            break
+            return ip_address
 
 def download_server_info(git_repo=None, git_username=None, git_password=None):
     #  downloads the server information so that restores can occur
@@ -196,16 +251,32 @@ def download_server_info(git_repo=None, git_username=None, git_password=None):
             droplet.load()
 
             priv_key = paramiko.RSAKey.from_private_key_file(ROOT_DIR + "/conf/privkey.pem")
+
+            #ssh in and save contents
             ssh_client = paramiko.SSHClient()
             ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             ssh_client.connect(hostname=droplet.ip_address, username="root", pkey=priv_key)
+            command1 = "cd /minecraft\n" \
+                       "screen -S minecraft -X stuff '/save-all\\r'\n"
+            response1 = ssh_client.exec_command(command1)
+            print(response1[1].read())
+            print(response1[2].read())
+
+            command2 = "cd /minecraft\n" \
+                       "zip -r world.zip world;" \
+                       "zip minecraft_save.zip banned-ips.json banned-players.json server.properties " \
+                       "usercache.json whitelist.json ops.json world.zip\n"
+            response2 = ssh_client.exec_command(command2)
+            print(response2[1].read())
+            print(response2[2].read())
+
             sftp_client = ssh_client.open_sftp()
 
             print("Authentication And Connection Via SFTP Successful, Now Transferring Files")
-
+            sftp_client.get("/minecraft/minecraft_save.zip", ROOT_DIR + "/conf/minecraft_save.zip")
+            sftp_client.close()
 
             # download the files
-
 
             # if a github repo was provided encrypt and send the data to there
             if git_repo is not None and git_username is not None and git_password is not None:
@@ -222,9 +293,10 @@ def download_server_info(git_repo=None, git_username=None, git_password=None):
                 encrypt_password = hasher.hexdigest()
 
                 for file in os.listdir(ROOT_DIR + "/conf"):
-                    zip_fp.write(filename=ROOT_DIR + "/conf/" + file,
-                                 compress_type=zipfile.ZIP_DEFLATED,
-                                 arcname=os.path.basename(ROOT_DIR + "/conf/" + file))
+                    if "pymmdat" not in file:
+                        zip_fp.write(filename=ROOT_DIR + "/conf/" + file,
+                                     compress_type=zipfile.ZIP_DEFLATED,
+                                     arcname=os.path.basename(ROOT_DIR + "/conf/" + file))
                 zip_fp.close()
                 if os.path.isfile(ROOT_DIR + "/tmp/pymmdat-" + nowstring + ".zip"):
                     shutil.move(ROOT_DIR + "/tmp/pymmdat-" + nowstring + ".zip", ROOT_DIR + "/conf/pymmdat-" + nowstring + ".zip")
@@ -289,8 +361,11 @@ if __name__ == '__main__':
         teardown_server()
     elif args['command'] == 'install':
         teardown_server()
-        install_server(do_size=args['size'], do_region=args['region'],
+        ip_address = install_server(do_size=args['size'], do_region=args['region'],
                        github=None)
+        print("The Server Setup Has Successfully Completed. Connect To The Following IP To Join The Server:")
+        print(ip_address)
+
     elif args['command'] == 'download':
         download_server_info()
 
